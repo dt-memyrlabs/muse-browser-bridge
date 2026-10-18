@@ -1,0 +1,7 @@
+{
+  "name": "com.memyr.muse_bridge",
+  "description": "Starts the Muse Browser Bridge relay",
+  "path": "__RELAY_HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}
