@@ -1,0 +1,47 @@
+# Live bridge state — never commit these. They contain live tokens,
+# pinned device keys, session metadata, page content, or screenshots.
+
+# Relay state (relay/relay.py defaults --state to state.json next to it)
+# and its backups: state.json.tmp (atomic save) and
+# state.json.corrupt-<timestamp> (kept when a state file is unreadable).
+state.json
+state.json.*
+
+# Chat token files (agent/client.py): the live token itself, plus any
+# per-chat token file created with --token-file.
+.muse-bridge-token
+.muse-bridge-token.*
+
+# Native enrollment secret: the pending announce/enrollment secret.
+# agent/client.py stores it in <token-file>.pending (covered above);
+# cover the standalone names too, wherever they are written.
+.muse-bridge-token.pending
+*enrollment-secret*
+*enrollment_secret*
+.enrollment-secret
+
+# Relay logs (native/relay_host.py appends these in the relay folder)
+relay_out.txt
+relay_err.txt
+*.log
+
+# Screenshots and page content saved next to the token file
+# (agent/client.py: mbb-shots/ for screenshots, mbb-output/ for page dumps)
+mbb-shots/
+mbb-output/
+shot-*.png
+shot-*.jpg
+shot-*.jpeg
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Node artefacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
