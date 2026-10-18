@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Muse Browser Bridge",
+  "version": "2.3.5",
+  "description": "Give tabs to a Muse chat. That chat can work only in the tabs you give it, on sites you allow.",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "action": {
+    "default_title": "Muse Browser Bridge"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms",
+    "sidePanel",
+    "notifications",
+    "debugger",
+    "clipboardWrite",
+    "nativeMessaging",
+    "scripting"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "minimum_chrome_version": "116",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
