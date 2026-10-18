@@ -1,0 +1,132 @@
+# Muse Browser Bridge
+
+Share a browser tab with a Muse chat. You generate a one-time code in
+the extension's side panel and paste it into that chat. The chat can then
+work in the tab you shared.
+
+This is an independent open-source project that works with Muse chats.
+It is not a Meta or Anthropic product, and it is not affiliated with or
+endorsed by Meta or Anthropic.
+It runs entirely on your own machine: a small Python relay on this
+computer connects the Chrome extension to the chat-side client in
+`agent/client.py`.
+
+## Prerequisites
+
+- Windows or macOS.
+- Python 3.10 or newer, with `pip`. On Windows, the `py -3` launcher
+  works wherever the commands below say `python`.
+- Google Chrome 116 or newer.
+
+## Setup (once)
+
+Do these steps in order. The native-host installer in step 3 needs the
+extension ID that Chrome shows in step 2.
+
+1. Install the relay's Python dependencies. From the folder that
+   contains this README, run:
+
+   ```
+   python -m pip install -r requirements.txt
+   ```
+
+   This installs the two packages the relay needs, `websockets` and
+   `cryptography`, at the minimum versions listed in
+   `requirements.txt`.
+
+2. Load the extension in Chrome:
+
+   - Open `chrome://extensions`.
+   - Turn on Developer mode.
+   - Click "Load unpacked" and choose this tree's `extension` folder.
+   - Chrome now lists "Muse Browser Bridge" and shows its extension
+     ID on that page. Keep the ID for the next step.
+
+3. Install the native-messaging host. The extension starts the relay
+   through a native host named `com.memyr.muse_bridge`, and Chrome
+   only trusts that host once it is registered for your user account.
+   From the folder that contains this README, run:
+
+   ```
+   python native/install_native_host.py --extension-id <your-extension-id>
+   ```
+
+   Replace `<your-extension-id>` with the ID from step 2. The
+   installer writes the real native-host manifest for your user — its
+   `path` points at this tree's `native/relay_host.py` and its
+   `allowed_origins` names only your extension ID — into the per-user
+   native-messaging location for your operating system (Windows and
+   macOS are supported). The tree ships only a template,
+   `native/com.memyr.muse_bridge.json.template`, whose `path` and
+   extension ID are placeholders. Do not edit or use that template by
+   hand; the installer generates the manifest your machine needs.
+
+4. Open the side panel. Click the Muse Browser Bridge extension icon
+   in Chrome. The panel asks Chrome to start the relay through the
+   native host; if the panel says the relay is offline, click
+   "Start relay" in the panel. The dot turns green and the panel says
+   "relay online" once the extension is connected.
+
+   You can also start the relay by hand from the folder that contains
+   this README:
+
+   ```
+   python relay/relay.py
+   ```
+
+   The relay listens for the extension on `ws://127.0.0.1:19822` and
+   for chats on `http://127.0.0.1:20822`.
+
+   **Network exposure, plainly:** by default the relay also listens
+   on this machine's Tailscale address, on the same chat port (20822),
+   when the machine has one, so another of your devices on your
+   tailnet can reach the chat API at that address. Pairing is refused
+   on the Tailscale listener; pairing only works from this machine.
+   If the machine has no Tailscale address, the relay listens on
+   loopback only. To force loopback only even when a Tailscale
+   address exists, start the relay with `--bind off`:
+
+   ```
+   python relay/relay.py --bind off
+   ```
+
+## Use: pair a chat by code
+
+1. In Chrome, go to the page you want to share.
+2. Click the Muse Browser Bridge extension icon to open the side
+   panel, then click "Generate a code". The panel shows an
+   8-character code. It works once and expires in about 5 minutes.
+3. Paste the code into the Muse chat that should control this tab.
+   That chat pairs from the folder that contains this README with:
+
+   ```
+   python agent/client.py pair <CODE> --chat "<chat name>"
+   ```
+
+   The code may be typed with or without the hyphen shown in the
+   panel. On success the client saves this chat's token to
+   `.muse-bridge-token` in the folder it was run from; later commands
+   for that chat must run from the same folder (see
+   `agent/SKILL.md` for the tools a paired chat can call).
+4. The shared tab is now connected to that chat. Chrome may show a
+   "being debugged" bar while the chat is acting in the tab. That is
+   how its clicks and typing become real input.
+5. To stop sharing: use "Stop sharing this tab" in the side panel for
+   one tab, or "Disconnect" in the panel's "Your chats" list to end a
+   chat.
+
+## Folder
+
+- `extension/`: the Chrome extension (Manifest V3). Load this folder
+  as an unpacked extension.
+- `relay/relay.py`: the relay. Extension side on port 19822, chat
+  side on port 20822.
+- `native/relay_host.py`: the native-messaging host that starts the
+  relay when the extension asks Chrome to. Installed by
+  `native/install_native_host.py` (see Setup step 3).
+- `native/install_native_host.py`: the installer from Setup step 3.
+  It fills `native/com.memyr.muse_bridge.json.template` (placeholders
+  only, not a usable manifest) with your path and extension ID.
+- `agent/`: `client.py`, the chat-side client, and `SKILL.md`, its
+  instructions for a Muse chat.
+- `requirements.txt`: the relay's Python dependencies.
