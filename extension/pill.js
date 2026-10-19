@@ -1,4 +1,4 @@
-/* Muse Browser Bridge — the pill shown on every tab a Muse chat controls.
+/* Muse Chrome Bridge — the pill shown on every tab a Muse chat controls.
  * Injected by the worker (chrome.scripting) into connected tabs only. It runs
  * in the extension's isolated world and draws into a closed shadow root, so
  * the page cannot read or change its text. The page CAN hide, remove or cover
