@@ -51,6 +51,24 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
   check("no window id keeps the old last-focused behaviour (fallback)",
     stFallback.current && stFallback.current.tabId === workTab.id, stFallback.current);
 
+  // A session owning a tab in window 2: tabsHere follows the panel's window,
+  // so a panel in window 1 can say "tabs in another window" instead of
+  // implying the chat is connected here with nothing under control.
+  await F.panel("share", { tabId: workTab.id });
+  const req = F.sent.filter((m) => m.t === "pair_request").pop();
+  F.FakeWS.last.deliver({ t: "pair_code", reqId: req.reqId, code: "WXYZ9876", expiresIn: 300 });
+  await tick(10);
+  F.FakeWS.last.deliver({ t: "paired", reqId: req.reqId, sessionId: "sessW", chatName: "Work Chat" });
+  await tick(40);
+  const stHere = await F.panel("state", { windowId: 2 });
+  const chatHere = stHere.chats.find((c) => c.sessionId === "sessW");
+  check("tabsHere counts the session's tab in the panel's own window",
+    !!chatHere && chatHere.tabs === 1 && chatHere.tabsHere === 1, chatHere);
+  const stThere = await F.panel("state", { windowId: 1 });
+  const chatThere = stThere.chats.find((c) => c.sessionId === "sessW");
+  check("tabsHere is 0 in the other window while the total stays 1",
+    !!chatThere && chatThere.tabs === 1 && chatThere.tabsHere === 0, chatThere);
+
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
