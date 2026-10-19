@@ -544,9 +544,9 @@ const plain = { tag: "button", text: "Show details", fp: "button|details" };
   await chrome.tabs.remove(C.tab.id);
   await tick(30);
   r = await cmd(C.sid, "tabs_context");
-  check("closing a chat's last tab keeps the chat connected, with no tabs", r.ok && r.data.tabs.length === 0, r);
+  check("closing a chat's last tab ends the chat (Daniel's rule, 2026-10-18)", !r.ok && r.error === "session_not_found", r);
   r = await cmd(C.sid, "navigate", { url: "https://crm2.example.com/next" });
-  check("...and it can open a new tab of its own", r.ok && (await owner(r.data.tabId)) === "Chat C", r);
+  check("...and a tabless chat can no longer open tabs: it pairs again first", !r.ok && r.error === "session_not_found", r);
 
   // pairing refused if the page changed before the code was used
   const Dp = mkTab("https://a.example.com/", { active: true });
