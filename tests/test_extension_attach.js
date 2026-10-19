@@ -108,8 +108,9 @@ const acks = (since, sid) => sent.slice(since).filter((m) => (m.t === "paired_ac
   const sessB = (await F.sw(`local.get("sessions", {})`))["sess-B"];
   check("attaching a tab another chat owns transfers it (one tab, one session)",
         acks(sn, "sess-A").some((m) => m.t === "paired_ack") && (await owner(t6.id)) === "Chat A"
-        && sessB && Object.keys(sessB.tabs).length === 0 && F.pillOf[t6.id] === "Chat A",
+        && !sessB && F.pillOf[t6.id] === "Chat A",
         { owner: await owner(t6.id), sessB });
+  check("...and the chat that lost its last tab is ended, not left at 0 tabs", !sessB, sessB);
 
   console.log(`\n${passes}/${passes + failures} passed`);
   process.exit(failures ? 1 : 0);
