@@ -210,13 +210,18 @@ function renderRest(st) {
     block.style.flexDirection = "column";
     block.style.alignItems = "stretch";
     const head = el("div", { class: "chat-head" },
-      el("span", { class: "name" }, x.chatName),
+      el("span", { class: "name" }, "Muse · " + x.chatName),
       el("span", { class: "muted" }, `${whereText(x)} · ${sites.length} site${sites.length === 1 ? "" : "s"}`),
       disconnectButton(x));
     head.style.display = "flex";
     head.style.alignItems = "center";
     head.style.gap = "8px";
     block.append(head);
+    if (Array.isArray(x.tabsList) && x.tabsList.length) {
+      const tl = el("div", { class: "sites" });
+      for (const t of x.tabsList) tl.append(el("div", { class: "muted" }, "• " + (t.title || t.host) + (t.here === false ? " — another window" : "")));
+      block.append(tl);
+    }
     if (sites.length) {
       const list = el("div", { class: "sites" });
       for (const host of sites) {
