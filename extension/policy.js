@@ -1,4 +1,4 @@
-/* Muse Browser Bridge v2 — pure rules (no chrome.* calls), unit-tested in Node.
+/* Muse Chrome Bridge v2 — pure rules (no chrome.* calls), unit-tested in Node.
  * Loaded into the service worker with importScripts, and required by tests. */
 (function (root) {
   "use strict";
