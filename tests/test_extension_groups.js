@@ -161,6 +161,16 @@ function helpers(F) {
   check("renaming a session's group away releases its tabs",
         !(await H.owner(at.id)) && H.groupOf(at.id) === alien.id);
 
+  // cross-window drag-in where only onAttached fires (no groupId update
+  // event): the tab must still be adopted
+  const gAx = H.groupsTitled("Muse · Chat A")[0];
+  const cw = mkTab("https://cross.example.com/", { windowId: 9 });
+  tabs.get(cw.id).groupId = gAx.id; tabs.get(cw.id).windowId = gAx.windowId;
+  F.E.tabsAttached.fire(cw.id, { newWindowId: gAx.windowId, newPosition: 0 });
+  await tick(80);
+  check("a tab that lands in the group with only an attach event is adopted",
+        (await H.owner(cw.id) || {}).chat === "Chat A", await H.owner(cw.id));
+
   // panel remove takes the tab out of the group too
   await F.panel("remove_tab", { tabId: t1.id });
   await tick(40);
