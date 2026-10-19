@@ -393,7 +393,7 @@ async function attachTab(sessionId, tab) {
   // A transfer ends the previous chat's claim on this tab at once: its
   // pending prompts for the tab are canceled and its in-flight commands
   // on the tab are marked canceled, so a late result is dropped.
-  if (prevOwner) { cancelTabWork(tab.id, sessionId); await cancelIfNoTabs(prevOwner); }
+  if (prevOwner) { cancelTabWork(tab.id, sessionId); await cancelIfNoTabs(prevOwner); await dropIfEmpty(prevOwner, "last tab taken by another chat"); }
   if (chat) { await groupTab(sessionId, tab); pill(tab.id, chat); }
   else memRemove(tab.id); // no such session: undo the mirror move above
   return chat;
@@ -418,6 +418,7 @@ async function releaseTab(tabId) {
   pill(tabId, null);
   await ungroupTab(tabId, chat);
   await detach(tabId);
+  if (ownerSid) await dropIfEmpty(ownerSid, "last tab removed");
   return chat;
 }
 /* ------------------------------------------------------- tab groups */
@@ -554,7 +555,14 @@ function syncTabGroupMembership(tabId) {
   }).catch(() => {});
 }
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info && info.groupId !== undefined) syncTabGroupMembership(tabId);
+  if (info && info.groupId !== undefined) {
+    syncTabGroupMembership(tabId);
+    // Same late-state guard as onAttached: a drag can report a passing
+    // groupId (or none) before the tab settles. Re-check shortly after;
+    // the sync is idempotent.
+    setTimeout(() => syncTabGroupMembership(tabId), 1200);
+    setTimeout(() => syncTabGroupMembership(tabId), 4000);
+  }
 });
 if (chrome.tabs.onAttached) chrome.tabs.onAttached.addListener((tabId) => {
   syncTabGroupMembership(tabId);
@@ -850,6 +858,17 @@ async function dropSession(sessionId, { tellRelay, why }) {
   await audit(removed.chatName, "disconnected", why || "", "ok");
 }
 
+// Daniel's rule (2026-10-18): a chat with no tabs is not connected. When a
+// session's last tab goes — closed, removed, dragged out of its group, or
+// taken by another chat — the session ends: the relay is told, the token
+// dies, and the chat pairs again with a new code when it needs a tab.
+// No 0-tab sessions linger in the panel.
+async function dropIfEmpty(sessionId, why) {
+  const s = (await getSessions())[sessionId];
+  if (!s || tabIdsOf(s).length) return;
+  await dropSession(sessionId, { tellRelay: true, why });
+}
+
 
 // A tab that is added to a chat's tab list by the user, or opened from
 // one of the chat's tabs, grants NOTHING. Sites are
@@ -872,7 +891,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     const owners = [];
     for (const [sid, v] of Object.entries(st)) if (v.tabs && own(v.tabs, String(tabId))) { owners.push(sid); delete v.tabs[String(tabId)]; }
     return owners;
-  }).then(async (owners) => { for (const sid of owners) await cancelIfNoTabs(sid); }).catch(() => {});
+  }).then(async (owners) => { for (const sid of owners) { await cancelIfNoTabs(sid); await dropIfEmpty(sid, "last tab closed"); } }).catch(() => {});
 });
 
 /* -------------------------------------------------------------- commands */
@@ -2392,7 +2411,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         for (const [sid, s] of Object.entries(sessions)) {
           const tids = await sessionTabs(sid);
           const tabsHere = typeof msg.windowId === "number" ? tids.filter((t) => t.windowId === msg.windowId).length : null;
-          chats.push({ sessionId: sid, chatName: s.chatName, tabs: tids.length, tabsHere, sites: Object.keys(s.sites) });
+          const tabsList = tids.map((t) => ({ tabId: t.id, host: P.hostOf(t.url), title: t.title || "",
+            windowId: t.windowId, here: typeof msg.windowId === "number" ? t.windowId === msg.windowId : null }));
+          chats.push({ sessionId: sid, chatName: s.chatName, tabs: tids.length, tabsHere, tabsList, sites: Object.keys(s.sites) });
         }
         return { ok: true, relay: { connected: wsReady, url: DEFAULT_RELAY, error: await local.get("relayError", ""),
                                     startError: await local.get("relayStartError", "") },
@@ -2493,18 +2514,20 @@ function setup() {
 }
 chrome.runtime.onInstalled.addListener(setup);
 chrome.runtime.onStartup.addListener(setup);
-// Browser restarts keep chat sessions, but tab ids are reassigned by
-// Chrome, so stored tab ownership starts empty — with one exception
-// (the B040 extension in DESIGN-GROUPS.md): tabs still sitting in a
-// chat's named group are re-adopted by that chat, because the group and
-// its title survive the restart even though tab ids do not. Ownership
-// of every other stored tab still starts empty, and a re-adopted tab's
-// site is re-checked against the chat's permitted sites. Service-worker
-// restarts do not fire onStartup, so this never fires mid-session.
+// Browser restarts: tab ids are reassigned by Chrome, so stored tab
+// ownership starts empty. Tabs still sitting in a chat's named group are
+// re-adopted by that chat (the B040 extension in DESIGN-GROUPS.md),
+// because the group and its title survive the restart even though tab
+// ids do not; a re-adopted tab's site is re-checked against the chat's
+// permitted sites. After that, Daniel's no-tabs-no-connection rule
+// (2026-10-18) applies: a session the restart left with no tabs at all
+// is ended, not kept as a 0-tab zombie. Service-worker restarts do not
+// fire onStartup, so this never fires mid-session.
 chrome.runtime.onStartup.addListener(async () => {
   memTabs.clear(); memOwner.clear();
   await withState((s) => { for (const v of Object.values(s)) { v.tabs = {}; v.groups = {}; } });
   await adoptGroupTabsAtStartup();
+  for (const sid of Object.keys(await getSessions())) await dropIfEmpty(sid, "browser restarted with no tabs in the group");
 });
 // Stored tab ids are also pruned by
 // validateStored() below; Disconnect is the way a chat is ended.
