@@ -162,3 +162,23 @@ that an emptied group disappears):
 - `tabs_create` lands the new tab in the creating session's group;
 - cross-chat isolation: chat B cannot act on a tab in chat A's group,
   and chat A's tabs are untouched by chat B's group events.
+
+## Amendment — 2026-10-18 (Daniel, after the first live use)
+
+1. **No tabs, no session.** A session whose last tab goes — closed,
+   removed, dragged out of the group, or taken by another chat — is
+   ended at once (relay told, token dead). The panel therefore never
+   shows a "0 tabs" chat. At browser startup the order is: clear stored
+   tab links, re-adopt tabs still in named groups, then end every
+   session the restart left with no tabs. This supersedes the earlier
+   "sessions persist across restarts and re-add tabs later" behaviour
+   for tab-less sessions; a chat that needs a tab pairs again with a
+   fresh code.
+2. **The panel shows groups, not counts.** Each chat is listed under
+   its group title ("Muse · <chat name>") with the tabs it owns listed
+   under the group; a tab in another window is marked as such.
+3. **Adoption is verified and never silent.** After a drag-in takeover
+   the worker checks that it owns the tab; any failure is written to
+   the audit log with its reason. Group changes also schedule delayed
+   re-checks (a drag can report a passing group id before the tab
+   settles), and the re-check is idempotent.
