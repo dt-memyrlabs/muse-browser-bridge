@@ -1,4 +1,4 @@
-/* Muse Browser Bridge v2 — service worker.
+/* Muse Chrome Bridge v2 — service worker.
  *
  * One pairing = one chat = one tab group. A chat can act only on tabs in its
  * own group, and only on sites the user permitted for that chat. Approvals come
