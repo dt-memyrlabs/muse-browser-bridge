@@ -60,6 +60,11 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
   await tick(20);
   check("setup: both chats hold their grouped tabs before the restart",
         (await owner(s1.id)) === "Chat A" && (await owner(s3.id)) === "Chat B");
+  // a third chat whose only tab sits in NO group at the restart: the
+  // restart leaves it with no tabs, so its session ends (Daniel's rule)
+  const s5 = mkTab("https://solo.example.com/", { active: true });
+  await pair(s5.id, "sess-C", "Chat C");
+  tabs.get(s5.id).groupId = -1; // silently ungrouped before the restart
 
   await Promise.all(F.E.startup.fire());
   await tick(60);
@@ -73,6 +78,9 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
         tabs.get(s2.id).groupId === -1);
   check("startup drops a controlled tab that is in no group (old B040 rule)",
         !(await owner(s4.id)));
+  const allS = await F.sw(`local.get("sessions", {})`);
+  check("startup ends a session the restart left with no tabs",
+        !allS["sess-C"] && !!allS["sess-A"] && !!allS["sess-B"], Object.keys(allS));
 
   console.log(`\n${passes}/${passes + failures} passed`);
   process.exit(failures ? 1 : 0);
