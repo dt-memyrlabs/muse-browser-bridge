@@ -346,7 +346,19 @@ def main(argv):
                                   "but the relay started a new session instead of attaching to it, so nothing was saved. "
                                   "Use your own --token-file (or --force if that chat is this one)."}, 1)
         write_private(token_file, res["token"])
-        return out({"ok": True, "chat": res["chatName"], "sessionId": res["sessionId"], "tokenFile": token_file}, 0)
+        result = {"ok": True, "chat": res["chatName"], "sessionId": res["sessionId"], "tokenFile": token_file}
+        if not live and res["chatName"] != (chat or "chat"):
+            # The relay renamed this pair because a live session already
+            # holds the requested name. That almost always means this chat
+            # paired before and this run did not present its token (wrong
+            # --token-file, or a different working folder: the default token
+            # file is ./.muse-bridge-token). Say so loudly instead of
+            # letting the chat work in the wrong session in silence.
+            result["warning"] = (f"a live session named \"{chat or 'chat'}\" already exists, so this pair "
+                                 f"created a separate session named \"{res['chatName']}\". If that session is "
+                                 "this chat's, disconnect this one and pair again with the token file that "
+                                 "holds the original session's token.")
+        return out(result, 0)
 
     token = read_token(token_file)
     if not token:
