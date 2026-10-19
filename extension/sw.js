@@ -522,7 +522,23 @@ function syncTabGroupMembership(tabId) {
         await audit(s.chatName, "tab refused", P.hostOf(tab.url) || "a non-web page", "not a web page; taken back out of the group");
         return;
       }
-      await attachTab(groupSid, tab);
+      // Adoption must be verified, never assumed: a silent failure here
+      // left a tab sitting in the group, unregistered, with no trace
+      // (Daniel, 2026-10-18). Any failure now lands in the audit log.
+      let adopted = false;
+      try {
+        await attachTab(groupSid, tab);
+        adopted = (await ownerOf(tab.id)) === groupSid;
+      } catch (e) {
+        await audit(s.chatName, "tab refused", P.hostOf(tab.url) || "tab",
+          "moved into the group but could not be taken over (" + ((e && e.name) || "error") + ")").catch(() => {});
+        return;
+      }
+      if (!adopted) {
+        await audit(s.chatName, "tab refused", P.hostOf(tab.url) || "tab",
+          "moved into the group but the takeover did not hold").catch(() => {});
+        return;
+      }
       const host = P.hostOf(tab.url);
       await withState((st) => { if (st[groupSid]) st[groupSid].sites[host] = true; });
       await audit(s.chatName, "tab added", host, "moved into the group by you");
@@ -540,7 +556,15 @@ function syncTabGroupMembership(tabId) {
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info && info.groupId !== undefined) syncTabGroupMembership(tabId);
 });
-if (chrome.tabs.onAttached) chrome.tabs.onAttached.addListener((tabId) => { syncTabGroupMembership(tabId); });
+if (chrome.tabs.onAttached) chrome.tabs.onAttached.addListener((tabId) => {
+  syncTabGroupMembership(tabId);
+  // A cross-window drag can land the tab in its new window before Chrome
+  // reports the group id; the sync above then sees no group and does
+  // nothing, and no second event may follow. Re-check shortly after —
+  // the sync is idempotent, so a needless re-check costs nothing.
+  setTimeout(() => syncTabGroupMembership(tabId), 1200);
+  setTimeout(() => syncTabGroupMembership(tabId), 4000);
+});
 chrome.tabGroups.onUpdated.addListener(async (g) => {
   // A rename can make a group a session's group, or stop it being one:
   // re-evaluate every tab in it.
@@ -2366,7 +2390,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const share = current && Object.entries(shares).find(([, s]) => s.tabId === current.tabId && s.expires > Date.now() && s.host === current.host);
         const chats = [];
         for (const [sid, s] of Object.entries(sessions)) {
-          chats.push({ sessionId: sid, chatName: s.chatName, tabs: (await sessionTabs(sid)).length, sites: Object.keys(s.sites) });
+          const tids = await sessionTabs(sid);
+          const tabsHere = typeof msg.windowId === "number" ? tids.filter((t) => t.windowId === msg.windowId).length : null;
+          chats.push({ sessionId: sid, chatName: s.chatName, tabs: tids.length, tabsHere, sites: Object.keys(s.sites) });
         }
         return { ok: true, relay: { connected: wsReady, url: DEFAULT_RELAY, error: await local.get("relayError", ""),
                                     startError: await local.get("relayStartError", "") },
