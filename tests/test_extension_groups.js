@@ -177,6 +177,38 @@ function helpers(F) {
   check("panel Remove ungroups the tab as well as releasing it",
         !(await H.owner(t1.id)) && H.groupOf(t1.id) === -1);
 
+  /* -------------------------------- grouping refused by the window */
+  // Chrome throws "Grouping is not supported by tabs in this window."
+  // for tabs in non-normal windows (the fake models this). The tab must
+  // stay shared, and the membership sync must NOT mistake "never landed
+  // in a group" for "left the group" and release it (live incident:
+  // Daniel's Stripe tab, 2026-10-18 23:32).
+  F.windowTypes[7] = "app";
+  const gt = mkTab("https://refused.example.com/", { windowId: 7 });
+  await H.pair(gt.id, "sess-C", "Chat C");
+  check("a tab Chrome refuses to group still pairs and stays owned",
+        (await H.owner(gt.id) || {}).chat === "Chat C" && H.groupOf(gt.id) === -1,
+        await H.owner(gt.id));
+  const sessC1 = (await F.sw(`local.get("sessions", {})`))["sess-C"];
+  check("...and the grouping failure is marked for retry",
+        !!(sessC1 && sessC1.groupRetry && Number(sessC1.groupRetry[String(gt.id)]) >= 1), sessC1);
+  // a stray group-related event runs the sync: it must not release it
+  F.E.tabsAttached.fire(gt.id, { newWindowId: 7, newPosition: 0 });
+  await tick(80);
+  check("the membership sync does not release a never-grouped tab",
+        (await H.owner(gt.id) || {}).chat === "Chat C", await H.owner(gt.id));
+  // the window starts allowing groups: the next sync heals the tab
+  F.windowTypes[7] = "normal";
+  F.E.tabsAttached.fire(gt.id, { newWindowId: 7, newPosition: 0 });
+  await tick(80);
+  const gC = H.groupsTitled("Muse · Chat C").find((g) => g.windowId === 7);
+  const sessC2 = (await F.sw(`local.get("sessions", {})`))["sess-C"];
+  check("once the window allows groups, the tab groups itself on a later sync",
+        !!gC && H.groupOf(gt.id) === gC.id && (await H.owner(gt.id) || {}).chat === "Chat C",
+        { groups: H.groupsTitled("Muse · Chat C"), groupOf: H.groupOf(gt.id) });
+  check("...and the retry mark is cleared",
+        !(sessC2 && sessC2.groupRetry && sessC2.groupRetry[String(gt.id)]), sessC2 && sessC2.groupRetry);
+
   console.log(`\n${passes}/${passes + failures} passed`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error("CRASH", e); process.exit(2); });
