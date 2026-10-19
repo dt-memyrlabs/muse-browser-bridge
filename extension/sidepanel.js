@@ -1,4 +1,4 @@
-/* Muse Browser Bridge v2 — side panel. The only place the user shares a page,
+/* Muse Chrome Bridge v2 — side panel. The only place the user shares a page,
  * answers a prompt, or disconnects a chat. Everything is rendered with
  * textContent (never innerHTML) so page titles and chat names cannot inject. */
 const $ = (id) => document.getElementById(id);
