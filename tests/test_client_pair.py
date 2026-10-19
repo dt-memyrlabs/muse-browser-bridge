@@ -53,6 +53,8 @@ class Stub(BaseHTTPRequestHandler):
             SEEN["pair_bodies"].append(body)
             if MODE["pair"] == "attached":
                 return self._json({"ok": True, "attached": True, "sessionId": "sid-live", "chatName": "Chat A"})
+            if MODE["pair"] == "renamed":
+                return self._json({"ok": True, "sessionId": "sid-fresh2", "token": "fresh-token-value", "chatName": "Chat A (2)"})
             return self._json({"ok": True, "sessionId": "sid-fresh", "token": "fresh-token-value", "chatName": "Chat A"})
         if self.path == "/revoke":
             SEEN["revokes"].append(body)
@@ -90,6 +92,8 @@ def main():
         check("no token held: pair sends no token field",
               SEEN["pair_bodies"][-1].get("token") is None, SEEN["pair_bodies"][-1])
         check("...and the fresh token is saved", code == 0 and open(tokfile).read() == "fresh-token-value", out)
+        check("...with no rename warning when the name comes back as asked",
+              "warning" not in out, out)
 
         # the chat now holds the stub's live token
         with open(tokfile, "w") as f:
@@ -119,6 +123,15 @@ def main():
         code, out = run_client(chatdir, "pair", "CODE0004", "--chat", "Chat A", "--force")
         check("--force pairs fresh and overwrites, as before",
               code == 0 and out.get("ok") is True and open(tokfile).read() == "fresh-token-value", out)
+
+        # (e) no token presented and the relay renames the pair (a live
+        # session already holds the name): pair succeeds but warns loudly
+        otherdir = os.path.join(tmp, "other")
+        os.makedirs(otherdir)
+        MODE["pair"] = "renamed"
+        code, out = run_client(otherdir, "pair", "CODE0005", "--chat", "Chat A")
+        check("renamed fresh pair: ok, and a warning names the existing session",
+              code == 0 and out.get("chat") == "Chat A (2)" and "already exists" in str(out.get("warning")), out)
     finally:
         server.shutdown()
     fails = [n for n, ok in results if not ok]
