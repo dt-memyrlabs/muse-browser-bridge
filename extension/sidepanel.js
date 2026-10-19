@@ -188,6 +188,17 @@ function disconnectButton(x) {
   return b;
 }
 
+// Where a chat's tabs are, from this window's point of view. A chat whose
+// tabs are all in another window must not read as "connected" here: its
+// pill is on its tab, in that window (Daniel, 2026-10-18).
+function whereText(x) {
+  if (!x.tabs) return "no tabs";
+  if (typeof x.tabsHere !== "number") return `${x.tabs} tab${x.tabs === 1 ? "" : "s"}`;
+  if (x.tabsHere === 0) return "tabs in another window";
+  if (x.tabsHere === x.tabs) return `${x.tabs} tab${x.tabs === 1 ? "" : "s"} here`;
+  return `${x.tabsHere} here · ${x.tabs - x.tabsHere} in another window`;
+}
+
 function renderRest(st) {
 
   // Chats
@@ -200,7 +211,7 @@ function renderRest(st) {
     block.style.alignItems = "stretch";
     const head = el("div", { class: "chat-head" },
       el("span", { class: "name" }, x.chatName),
-      el("span", { class: "muted" }, `${x.tabs} tab${x.tabs === 1 ? "" : "s"} · ${sites.length} site${sites.length === 1 ? "" : "s"}`),
+      el("span", { class: "muted" }, `${whereText(x)} · ${sites.length} site${sites.length === 1 ? "" : "s"}`),
       disconnectButton(x));
     head.style.display = "flex";
     head.style.alignItems = "center";
