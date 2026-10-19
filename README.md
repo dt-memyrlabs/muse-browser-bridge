@@ -1,4 +1,4 @@
-# Muse Browser Bridge
+# Muse Chrome Bridge
 
 Share a browser tab with a Muse chat. You generate a one-time code in
 the extension's side panel and paste it into that chat. The chat can then
@@ -39,7 +39,7 @@ extension ID that Chrome shows in step 2.
    - Open `chrome://extensions`.
    - Turn on Developer mode.
    - Click "Load unpacked" and choose this tree's `extension` folder.
-   - Chrome now lists "Muse Browser Bridge" and shows its extension
+   - Chrome now lists "Muse Chrome Bridge" and shows its extension
      ID on that page. Keep the ID for the next step.
 
 3. Install the native-messaging host. The extension starts the relay
@@ -61,7 +61,7 @@ extension ID that Chrome shows in step 2.
    extension ID are placeholders. Do not edit or use that template by
    hand; the installer generates the manifest your machine needs.
 
-4. Open the side panel. Click the Muse Browser Bridge extension icon
+4. Open the side panel. Click the Muse Chrome Bridge extension icon
    in Chrome. The panel asks Chrome to start the relay through the
    native host; if the panel says the relay is offline, click
    "Start relay" in the panel. The dot turns green and the panel says
@@ -93,7 +93,7 @@ extension ID that Chrome shows in step 2.
 ## Use: pair a chat by code
 
 1. In Chrome, go to the page you want to share.
-2. Click the Muse Browser Bridge extension icon to open the side
+2. Click the Muse Chrome Bridge extension icon to open the side
    panel, then click "Generate a code". The panel shows an
    8-character code. It works once and expires in about 5 minutes.
 3. Paste the code into the Muse chat that should control this tab.
