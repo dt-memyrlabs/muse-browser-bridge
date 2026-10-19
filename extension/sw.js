@@ -393,7 +393,7 @@ async function attachTab(sessionId, tab) {
   // A transfer ends the previous chat's claim on this tab at once: its
   // pending prompts for the tab are canceled and its in-flight commands
   // on the tab are marked canceled, so a late result is dropped.
-  if (prevOwner) { cancelTabWork(tab.id, sessionId); await cancelIfNoTabs(prevOwner); await dropIfEmpty(prevOwner, "last tab taken by another chat"); }
+  if (prevOwner) { cancelTabWork(tab.id, sessionId); await clearGroupRetry(prevOwner, tab.id); await cancelIfNoTabs(prevOwner); await dropIfEmpty(prevOwner, "last tab taken by another chat"); }
   if (chat) { await groupTab(sessionId, tab); pill(tab.id, chat); }
   else memRemove(tab.id); // no such session: undo the mirror move above
   return chat;
@@ -418,7 +418,7 @@ async function releaseTab(tabId) {
   pill(tabId, null);
   await ungroupTab(tabId, chat);
   await detach(tabId);
-  if (ownerSid) await dropIfEmpty(ownerSid, "last tab removed");
+  if (ownerSid) { await clearGroupRetry(ownerSid, tabId); await dropIfEmpty(ownerSid, "last tab removed"); }
   return chat;
 }
 /* ------------------------------------------------------- tab groups */
@@ -446,6 +446,20 @@ async function rememberGroup(sessionId, windowId, groupId) {
 // window already carrying the session's title, else a new group (titled
 // and coloured here). Never throws: a window that refuses groups leaves
 // the tab owned and ungrouped, with an audit line.
+// Tabs whose grouping Chrome refused when they were shared (the tab was
+// mid-drag, or its window declines tab groups). Such a tab never landed
+// in its group, so being groupless is not "leaving": the membership sync
+// must not release it (the release branch would drop a live shared tab
+// on the first stray group event). Instead the sync retries grouping;
+// the mark counts the tries and bounds them. After the bound the tab
+// simply stays shared and ungrouped — pill and panel still carry it.
+async function markGroupRetry(sessionId, tabId) {
+  await withState((st) => { const v = st[sessionId]; if (!v) return; v.groupRetry = v.groupRetry || {}; const k = String(tabId); v.groupRetry[k] = (Number(v.groupRetry[k]) || 0) + 1; }).catch(() => {});
+}
+async function clearGroupRetry(sessionId, tabId) {
+  await withState((st) => { const v = st[sessionId]; if (v && v.groupRetry) delete v.groupRetry[String(tabId)]; }).catch(() => {});
+}
+
 async function groupTab(sessionId, tab) {
   if (!tab || tab.windowId == null) return;
   let chat = "";
@@ -465,15 +479,19 @@ async function groupTab(sessionId, tab) {
       const hit = (inWindow || []).find((g) => g.title === title);
       if (hit) gid = hit.id;
     }
-    if (gid != null && tab.groupId === gid) { await rememberGroup(sessionId, tab.windowId, gid); return; }
+    if (gid != null && tab.groupId === gid) { await rememberGroup(sessionId, tab.windowId, gid); await clearGroupRetry(sessionId, tab.id); return; }
     if (gid != null) await chrome.tabs.group({ groupId: gid, tabIds: [tab.id] });
     else {
       gid = await chrome.tabs.group({ tabIds: [tab.id] });
       await chrome.tabGroups.update(gid, { title, color: groupColor(s.chatName) });
     }
     await rememberGroup(sessionId, tab.windowId, gid);
+    await clearGroupRetry(sessionId, tab.id);
   } catch (e) {
-    await audit(chat, "tab group", P.clip((e && e.message) || e, 120), "grouping failed; the tab stays ungrouped").catch(() => {});
+    await markGroupRetry(sessionId, tab.id);
+    let wtype = "";
+    try { const w = await chrome.windows.get(tab.windowId); if (w && w.type) wtype = " (window type: " + w.type + ")"; } catch (err) {}
+    await audit(chat, "tab group", P.clip(((e && e.message) || e) + wtype, 120), "grouping failed; the tab stays shared and ungrouped, and the bridge keeps retrying").catch(() => {});
   }
 }
 // Take a tab out of its session's group (release paths). Only a group
@@ -545,10 +563,21 @@ function syncTabGroupMembership(tabId) {
       await audit(s.chatName, "tab added", host, "moved into the group by you");
       notifyPanel();
     } else if (!groupSid && ownerSid) {
-      // The tab left its chat's group (ungrouped, moved to another
-      // group, or moved to another window): the session loses it now.
-      const chat = await releaseTab(tabId);
-      if (chat) { await audit(chat, "tab removed", "left the group", "ok"); notifyPanel(); }
+      const retryMark = sessions[ownerSid] && sessions[ownerSid].groupRetry
+        ? Number(sessions[ownerSid].groupRetry[String(tabId)]) || 0 : 0;
+      if (retryMark > 0) {
+        // Grouping failed when this tab was shared, so it never landed
+        // in its group: being groupless is not leaving. Never release
+        // it for that; retry grouping instead (bounded by the mark),
+        // so the tab heals itself once Chrome accepts the group (for
+        // example after the tab is moved to a window that allows them).
+        if (retryMark <= 8) await groupTab(ownerSid, tab);
+      } else {
+        // The tab left its chat's group (ungrouped, moved to another
+        // group, or moved to another window): the session loses it now.
+        const chat = await releaseTab(tabId);
+        if (chat) { await audit(chat, "tab removed", "left the group", "ok"); notifyPanel(); }
+      }
     } else if (groupSid && groupSid === ownerSid) {
       await rememberGroup(groupSid, tab.windowId, tab.groupId);
     }
