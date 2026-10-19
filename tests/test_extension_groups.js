@@ -114,7 +114,7 @@ function helpers(F) {
   await tick(60);
   const sessB = (await F.sw(`local.get("sessions", {})`))["sess-B"];
   check("a tab dragged from B's group into A's transfers (one tab, one session)",
-        (await H.owner(u1.id) || {}).chat === "Chat A" && sessB && Object.keys(sessB.tabs).length === 0,
+        (await H.owner(u1.id) || {}).chat === "Chat A" && !sessB,
         { owner: await H.owner(u1.id), sessB });
 
   // drag-out releases: ungroup
