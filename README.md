@@ -1,17 +1,49 @@
-# Muse Chrome Bridge
+<p align="center">
+  <img src="icon-512.png" width="160" alt="Muse Chrome Bridge icon">
+</p>
 
-<img src="icon-512.png" width="128" alt="Muse Chrome Bridge icon">
+<h1 align="center">Muse Chrome Bridge</h1>
 
-Share a browser tab with a Muse chat. You generate a one-time code in
-the extension's side panel and paste it into that chat. The chat can then
-work in the tab you shared.
+<p align="center"><strong>Share a browser tab with a Muse chat — by a one-time code, only when you say so.</strong></p>
 
-This is an independent open-source project that works with Muse chats.
-It is not a Meta or Anthropic product, and it is not affiliated with or
-endorsed by Meta or Anthropic.
-It runs entirely on your own machine: a small Python relay on this
-computer connects the Chrome extension to the chat-side client in
-`agent/client.py`.
+You generate a one-time code in the extension's side panel and paste it
+into a Muse chat. That chat can then work in the tab you shared: read
+the page, click, type, and scroll — while you watch it happen. Nothing
+is shared until you generate a code or drag a tab into a chat's group,
+and closing the tab ends the connection.
+
+## What it does
+
+- **Pair by code.** One code, one tab, one chat. Codes work once and
+  expire in about 5 minutes.
+- **A tab group per chat.** A shared tab moves into a Chrome tab group
+  named `Muse · <chat name>`. Drag a tab into the group to share it
+  with that chat — no second code. Drag it out, or close it, and the
+  chat loses it.
+- **You can see it work.** A controlled tab carries a pill:
+  `● Muse · <chat name> ✕`. While a chat acts, its cursor travels to
+  each target on the page, the page scrolls smoothly to what it is
+  about to touch, and the side panel shows a live view of the work.
+- **Your rules stand.** Site allow/deny lists, an approval prompt
+  before risky actions, and extra protection around password and
+  payment pages — the live view and screenshots stay hidden there.
+- **Local only.** No account, no Memyr Labs server, nothing leaves
+  your machine. The relay, the extension, and the chat client all run
+  on your computer.
+
+## How it works
+
+Three pieces, all on your machine:
+
+1. The **Chrome extension** holds the sharing rules and works the tab.
+2. A small **Python relay** passes messages between the extension and
+   the chat, and starts on demand through a native-messaging host.
+3. The **chat-side client** (`agent/client.py`) is how a Muse chat
+   pairs with your code and calls the tab tools.
+
+This is an independent open-source project that works with Muse
+chats. It is not a Meta or Anthropic product, and it is not affiliated
+with or endorsed by Meta or Anthropic.
 
 ## Prerequisites
 
