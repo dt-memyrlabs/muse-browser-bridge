@@ -15,7 +15,7 @@
 importScripts("policy.js");
 const P = self.MBB;
 
-const VERSION = "2.3.5";
+const VERSION = "2.4.0";
 const DEFAULT_RELAY = "ws://127.0.0.1:19822";
 const APPROVAL_MS = 60000;      // longest a prompt waits
 const MIN_ASK_MS = 5000;        // don't open a prompt with less time than this left
@@ -25,6 +25,9 @@ const DEBUGGER_IDLE_MS = 30000;
 const LOAD_WAIT_MS = 15000;
 const MAX_RESULT_BYTES = 12000000;  // relay drops messages over 16 MB
 const SHOT_MAX_B64 = 6000000;
+const SCROLL_SETTLE_MS = 900;   // longest wait for a smooth scroll to come to rest
+const CAPTURE_EVERY_MS = 1500;  // live-view cadence while a chat is working a tab
+const CAPTURE_TAIL_MS = 6000;   // keep the live view warm briefly after the last action
 const COLORS = ["blue", "purple", "cyan", "green", "orange", "pink", "yellow", "red"];
 const WORKER_ID = crypto.randomUUID();
 const PROBE_SRC = P.pageProbe.toString();
@@ -416,6 +419,8 @@ async function releaseTab(tabId) {
   // for the chat that held it, the same way a transfer does.
   if (chat) { cancelTabWork(tabId, null); await cancelIfNoTabs(ownerSid); }
   pill(tabId, null);
+  void cursor(tabId, null); // an unshared tab keeps neither the pill nor the cursor
+  forgetTabView(tabId);
   await ungroupTab(tabId, chat);
   await detach(tabId);
   if (ownerSid) { await clearGroupRetry(ownerSid, tabId); await dropIfEmpty(ownerSid, "last tab removed"); }
@@ -667,7 +672,42 @@ async function pill(tabId, chat) {
       if (!(await owned())) return;
     }
     await chrome.scripting.executeScript({ target: { tabId }, func: (n) => { if (window.__museBridgePill) window.__museBridgePill(n); }, args: [chat] });
+    if (chat) void cursor(tabId, { op: "warm" }); // the cursor script rides along with the pill
   } catch (e) { /* not scriptable */ }
+}
+
+/* ------------------------------------------------------- on-page cursor */
+// The visible hand of the bridge. Claude in Chrome is seen working: its
+// cursor travels across the page, the page scrolls, then the click lands.
+// This bridge used to act invisibly — a CDP press out of nowhere. The
+// cursor script (cursor.js) lives beside the pill in the same overlay
+// layer; the helpers below drive it. Presentation is best-effort by
+// design: a page that refuses scripts, or a tab that went away mid-glide,
+// simply gets no show — the action itself is never failed by it.
+const cursorReady = new Map(); // tabId -> url the cursor script was injected into
+async function cursor(tabId, cmd) {
+  try {
+    if (!cmd) { // removal needs no live tab record and no injection
+      await chrome.scripting.executeScript({ target: { tabId },
+        func: (c) => { if (window.__museBridgeCursor) return window.__museBridgeCursor(c); }, args: [null] }).catch(() => {});
+      cursorReady.delete(tabId);
+      return;
+    }
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t) return;
+    if (cursorReady.get(tabId) !== t.url) {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["cursor.js"] });
+      cursorReady.set(tabId, t.url);
+    }
+    await chrome.scripting.executeScript({ target: { tabId },
+      func: (c) => { if (window.__museBridgeCursor) return window.__museBridgeCursor(c); }, args: [cmd] });
+  } catch (e) { /* not scriptable: no show */ }
+}
+// Glide the cursor to a viewport point; pulse rings the point the way a
+// click lands. Resolves when the glide has finished on screen, so callers
+// fire the real action only after the user has seen the cursor arrive.
+async function cursorGo(tabId, x, y, pulse) {
+  await cursor(tabId, { op: "go", x: Math.round(x), y: Math.round(y), pulse: !!pulse });
 }
 // Keep each tab's recorded site current, and re-draw the pill after a page load.
 chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
@@ -883,7 +923,8 @@ async function dropSession(sessionId, { tellRelay, why }) {
   if (tellRelay) relaySend({ t: "revoke", sessionId }); // if offline, the next hello leaves it out and the relay drops it
   for (const [id, p] of pending) if (p.sessionId === sessionId) settle(id, false, "session_closed");
   for (const job of inflight.values()) if (job.sessionId === sessionId) job.canceled = true;
-  for (const id of tabIdsOf(removed)) { pill(id, null); await ungroupTab(id, removed.chatName); await detach(id); }
+  liveViews.delete(sessionId); liveActivity.delete(sessionId);
+  for (const id of tabIdsOf(removed)) { pill(id, null); void cursor(id, null); forgetTabView(id); await ungroupTab(id, removed.chatName); await detach(id); }
   await audit(removed.chatName, "disconnected", why || "", "ok");
 }
 
@@ -915,7 +956,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // an Allow racing the close must not beat it (see releaseTab).
   const memOwnerSid = memRemove(tabId);
   if (memOwnerSid) cancelIfSessionEmpty(memOwnerSid);
-  detach(tabId); dropRefs(tabId); worlds.delete(tabId);
+  detach(tabId); dropRefs(tabId); worlds.delete(tabId); forgetTabView(tabId);
   withState((st) => {
     const owners = [];
     for (const [sid, v] of Object.entries(st)) if (v.tabs && own(v.tabs, String(tabId))) { owners.push(sid); delete v.tabs[String(tabId)]; }
@@ -931,7 +972,7 @@ const inflight = new Map(); // cmdId -> {id, sessionId, action, deadline, cancel
 function noteJobTab(ctx, tabId) {
   if (tabId == null || !Number.isFinite(Number(tabId))) return;
   tabId = Number(tabId);
-  if (ctx) ctx.tabId = tabId;
+  if (ctx) { ctx.tabId = tabId; noteActivity(ctx.sessionId, tabId); }
   if (ctx && ctx.job) (ctx.job.tabs || (ctx.job.tabs = new Set())).add(tabId);
 }
 
@@ -1423,6 +1464,74 @@ async function nodeForRef(tab, ref) {
   const cur = axLine(now);
   if (cur.role !== hit.role || cur.name !== hit.name) throw fail("target_changed", "that element changed; read_page again");
   return hit.b;
+}
+
+/* ------------------------------------------------- visible scrolling */
+// pointForNode() below scrolls with DOM.scrollIntoViewIfNeeded: instant,
+// so a click on an element below the fold used to teleport the page. These
+// helpers scroll the way a person watching expects — animated — and wait
+// for the element to come to rest before its point is read.
+const SMOOTH_NODE_SRC = `function () {
+  try { this.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" }); return true; }
+  catch (e) { return false; }
+}`;
+const SMOOTH_WIN_SRC = `function (dx, dy) {
+  try { window.scrollBy({ left: dx, top: dy, behavior: "smooth" }); return true; }
+  catch (e) { return false; }
+}`;
+
+async function quadsCenter(tabId, backendNodeId) {
+  const { quads } = await cdp(tabId, "DOM.getContentQuads", { backendNodeId });
+  if (!quads || !quads.length) return null;
+  const q = quads[0];
+  return { x: (q[0] + q[2] + q[4] + q[6]) / 4, y: (q[1] + q[3] + q[5] + q[7]) / 4 };
+}
+
+// Bring a node into view with an animated scroll and return its centre in
+// viewport coordinates once it rests. Already on screen: its centre at
+// once, no scroll. No box at all: null (callers fall back to
+// pointForNode, which refuses with not_visible as before).
+async function smoothShowNode(tab, backendNodeId) {
+  const v = await viewport(tab.id);
+  const onScreen = (c) => c && c.x >= -4 && c.y >= -4 && c.x <= v.w + 4 && c.y <= v.h + 4;
+  let c = await quadsCenter(tab.id, backendNodeId).catch(() => null);
+  if (!c || onScreen(c)) return c;
+  await runInWorld(tab, backendNodeId, SMOOTH_NODE_SRC, []).catch(() => false);
+  // Settled means: the element first MOVED (an animated scroll takes a
+  // beat to start, and two identical reads before that mean "not yet",
+  // not "done"), then stopped moving. A scroll that never moves anything
+  // (the page refused, or the element was already as shown as it gets)
+  // is given a short grace, not the whole wait.
+  const start = c, end = Date.now() + SCROLL_SETTLE_MS;
+  let prev = c, stable = 0, moved = false;
+  while (Date.now() < end) {
+    await sleep(50);
+    const n = await quadsCenter(tab.id, backendNodeId).catch(() => null);
+    if (!n) return null;
+    c = n;
+    if (Math.abs(n.x - start.x) > 1 || Math.abs(n.y - start.y) > 1) moved = true;
+    if (moved) {
+      if (Math.abs(n.x - prev.x) < 1 && Math.abs(n.y - prev.y) < 1) { if (++stable >= 1) break; }
+      else stable = 0;
+    } else if (Date.now() > end - SCROLL_SETTLE_MS + 350) break;
+    prev = n;
+  }
+  return c;
+}
+
+// The same for a bare viewport point outside the visible area (an agent
+// clicking coordinates taken from an earlier, taller view of the page):
+// scroll the window smoothly until the point is in view and hand back the
+// point's new viewport coordinates.
+async function smoothShowPoint(tab, x, y) {
+  const v = await viewport(tab.id);
+  if (x >= 0 && y >= 0 && x < v.w && y < v.h) return { x, y };
+  const dx = x < 0 ? x - 40 : x >= v.w ? x - v.w + 40 : 0;
+  const dy = y < 0 ? y - 40 : y >= v.h ? y - v.h + 40 : 0;
+  await runInWorld(tab, null, SMOOTH_WIN_SRC, [Math.round(dx), Math.round(dy)]).catch(() => false);
+  await sleep(450);
+  const v2 = await viewport(tab.id);
+  return { x: x - (v2.x - v.x), y: y - (v2.y - v.y) };
 }
 
 async function pointForNode(tabId, backendNodeId) {
@@ -2062,14 +2171,23 @@ TOOLS.computer = async (ctx, a) => {
   const host = P.hostOf(tab.url);
   const mods = modMask(a.modifiers);
 
-  // Where. A ref resolves to the centre of its element.
+  // Where. A ref resolves to the centre of its element. Pointer actions
+  // first bring their target into view with a visible, animated scroll, so
+  // the point read afterwards is the rested on-screen position and the
+  // user sees the page move before anything is pressed.
+  const POINTED = ["left_click", "right_click", "double_click", "triple_click", "hover", "scroll_to", "left_click_drag"];
   let x, y, backend = null;
   if (a.ref != null) {
     backend = await nodeForRef(tab, a.ref);
-    ({ x, y } = await pointForNode(tab.id, backend));
+    if (POINTED.includes(action)) {
+      const c = await smoothShowNode(tab, backend).catch(() => null);
+      if (c) { x = c.x; y = c.y; }
+    }
+    if (x == null) ({ x, y } = await pointForNode(tab.id, backend));
   } else if (Array.isArray(a.coordinate)) {
     [x, y] = a.coordinate.map(Number);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw fail("bad_coordinate");
+    if (POINTED.includes(action)) ({ x, y } = await smoothShowPoint(tab, x, y));
   }
 
   switch (action) {
@@ -2078,13 +2196,14 @@ TOOLS.computer = async (ctx, a) => {
       const count = { left_click: 1, right_click: 1, double_click: 2, triple_click: 3 }[action];
       const button = action === "right_click" ? "right" : "left";
       const d = await gatedPress(ctx, tab, host, x, y, backend, action === "right_click" ? "Right-click" : "Click", count,
-        () => clickAt(tab.id, x, y, button, count, mods));
+        async () => { await cursorGo(tab.id, x, y, true); await clickAt(tab.id, x, y, button, count, mods); });
       await audit(ctx.chat, action, P.describeTarget(d) + " @ " + host, "ok");
       return { clicked: P.describeTarget(d) };
     }
     case "hover":
       if (x == null) throw fail("need_coordinate_or_ref");
       checkLive(ctx);
+      await cursorGo(tab.id, x, y, false);
       await mouse(tab.id, "mouseMoved", x, y, { modifiers: mods });
       return {};
     case "scroll": {
@@ -2095,6 +2214,7 @@ TOOLS.computer = async (ctx, a) => {
       const dx = dir === "left" ? -n : dir === "right" ? n : 0;
       const dy = dir === "up" ? -n : dir === "down" ? n : 0;
       checkLive(ctx);
+      await cursorGo(tab.id, px, py, false); // the hand arrives before the page moves
       // Chrome sometimes never answers a wheel event: a scroll on a foreground
       // tab can hit the 15 s cdp_timeout.
       // Wait 3 s for the wheel; if Chrome does not answer, scroll the element
@@ -2113,17 +2233,22 @@ TOOLS.computer = async (ctx, a) => {
       }
       return {};
     }
-    case "scroll_to":
+    case "scroll_to": {
       if (backend == null) throw fail("need_ref");
-      await cdp(tab.id, "DOM.scrollIntoViewIfNeeded", { backendNodeId: backend });
+      // Visible, animated — not the instant jump this used to make.
+      const c = await smoothShowNode(tab, backend).catch(() => null);
+      if (!c) await cdp(tab.id, "DOM.scrollIntoViewIfNeeded", { backendNodeId: backend });
+      else await cursorGo(tab.id, c.x, c.y, false);
       return {};
+    }
     case "left_click_drag": {
       if (!Array.isArray(a.start_coordinate) || x == null) throw fail("need_coordinates", "start_coordinate and coordinate");
       const [sx, sy] = a.start_coordinate.map(Number);
       if (!Number.isFinite(sx) || !Number.isFinite(sy)) throw fail("bad_coordinate");
       if (Math.hypot(x - sx, y - sy) < 5) {
         // A drag that barely moves is a click, and is checked as one.
-        const d = await gatedPress(ctx, tab, host, x, y, null, "Click", 1, () => clickAt(tab.id, x, y, "left", 1, 0));
+        const d = await gatedPress(ctx, tab, host, x, y, null, "Click", 1,
+          async () => { await cursorGo(tab.id, x, y, true); await clickAt(tab.id, x, y, "left", 1, 0); });
         await audit(ctx.chat, "left_click_drag (a click)", P.describeTarget(d) + " @ " + host, "ok");
         return { clicked: P.describeTarget(d) };
       }
@@ -2139,6 +2264,7 @@ TOOLS.computer = async (ctx, a) => {
         if (s2.fp2 !== ds.fp2 || e2.fp2 !== de.fp2) throw fail("target_changed", "the page changed while the user was deciding");
       }
       checkLive(ctx);
+      await cursorGo(tab.id, sx, sy, false);
       await mouse(tab.id, "mouseMoved", sx, sy, {});
       await recheck(ctx, tab);
       await mouse(tab.id, "mousePressed", sx, sy, { button: "left", clickCount: 1 });
@@ -2149,6 +2275,7 @@ TOOLS.computer = async (ctx, a) => {
       // the release instead of letting them land on the removed site.
       for (let i = 1; i <= 10; i++) { await recheck(ctx, tab); await mouse(tab.id, "mouseMoved", sx + ((x - sx) * i) / 10, sy + ((y - sy) * i) / 10, { buttons: 1 }); }
       await recheck(ctx, tab);
+      await cursorGo(tab.id, x, y, false); // the hand carries the drag to its end
       await mouse(tab.id, "mouseReleased", x, y, { button: "left", clickCount: 1 });
       await audit(ctx.chat, "left_click_drag", `${P.describeTarget(ds)} → ${P.describeTarget(de)} @ ${host}`, "ok");
       return { from: P.describeTarget(ds), to: P.describeTarget(de) };
@@ -2223,6 +2350,10 @@ TOOLS.form_input = async (ctx, a) => {
         factKeys.some((k) => !!d2[k] !== !!d[k])) throw fail("target_changed");
   }
   checkLive(ctx);
+  // Seen, like every other action: the field is scrolled into view and
+  // the cursor travels to it before anything is set.
+  const fc = await smoothShowNode(tab, backend).catch(() => null);
+  if (fc) await cursorGo(tab.id, fc.x, fc.y, false);
   const kind = d.tag === "select" ? "select" : (d.type === "checkbox" || d.type === "radio") ? "check" : "text";
   if (kind === "text") {
     await cdp(tab.id, "DOM.focus", { backendNodeId: backend });
@@ -2391,6 +2522,77 @@ TOOLS.browser_batch = async (ctx, a) => {
   return { results };
 };
 
+/* ------------------------------------------------------------ live view */
+// While a chat works, the side panel shows what its tab looks like right
+// now — the "watch it work" picture. Captures run only while a command
+// for the chat is in flight (plus a few seconds' tail after the last
+// action), only of the tab that command is acting on, and only while
+// that tab is the one in front of its window (captureVisibleTab can only
+// photograph the visible tab, and naming another tab's picture as this
+// chat's would be a lie). The sensitivity gate is the screenshot gate:
+// a page with a password or payment field, or a frame Muse cannot see
+// into, hides the view instead of being photographed. The image lives
+// only in this worker's memory and goes only to the side panel — never
+// to the relay, never into a command result, never to storage.
+const liveViews = new Map();     // sessionId -> {tabId, at, image} | {tabId, at, blocked}
+const liveActivity = new Map();  // sessionId -> {tabId, at}
+let captureTimer = null, captureBusy = false, lastCaptureAt = 0;
+
+function noteActivity(sessionId, tabId) {
+  if (!sessionId || !Number.isFinite(tabId)) return;
+  liveActivity.set(sessionId, { tabId, at: Date.now() });
+  if (captureTimer == null) {
+    captureTimer = setInterval(() => { captureTick().catch(() => {}); }, 500);
+    if (captureTimer && typeof captureTimer.unref === "function") captureTimer.unref();
+  }
+}
+function forgetTabView(tabId) {
+  cursorReady.delete(tabId);
+  for (const [sid, a] of liveActivity) if (a.tabId === tabId) liveActivity.delete(sid);
+  for (const [sid, v] of liveViews) if (v.tabId === tabId) liveViews.delete(sid);
+}
+async function captureTick() {
+  if (captureBusy) return;
+  const now = Date.now();
+  const targets = new Map(); // sessionId -> tabId being worked right now
+  for (const job of inflight.values()) {
+    if (job.canceled) continue;
+    for (const t of job.tabs || []) targets.set(job.sessionId, t);
+  }
+  for (const [sid, a] of liveActivity) {
+    if (now - a.at > 30000) { liveActivity.delete(sid); continue; }
+    if (now - a.at <= CAPTURE_TAIL_MS && !targets.has(sid)) targets.set(sid, a.tabId);
+  }
+  if (!targets.size) { clearInterval(captureTimer); captureTimer = null; return; }
+  if (now - lastCaptureAt < CAPTURE_EVERY_MS) return;
+  const [sid, tabId] = targets.entries().next().value;
+  captureBusy = true;
+  try { await captureLiveView(sid, tabId); } catch (e) { /* the view is best-effort */ }
+  finally { captureBusy = false; }
+}
+// One capture for the panel. Returns false (and changes nothing) when the
+// tab is not this chat's, not in front, or not a web page.
+async function captureLiveView(sessionId, tabId) {
+  lastCaptureAt = Date.now();
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !tab.active || memOwner.get(tabId) !== sessionId || !P.isWebUrl(tab.url)) return false;
+  const host = P.hostOf(tab.url);
+  const kind = shotKind(await shotProbeSens(tab, host));
+  if (kind) {
+    liveViews.set(sessionId, { tabId, at: Date.now(), blocked: kind });
+    notifyPanel();
+    return true;
+  }
+  const image = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 50 });
+  // The page may have moved or been given to another chat while the shot
+  // was taken: never show one page under another page's name.
+  const after = await chrome.tabs.get(tabId).catch(() => null);
+  if (!after || P.hostOf(after.url) !== host || memOwner.get(tabId) !== sessionId) return false;
+  liveViews.set(sessionId, { tabId, at: Date.now(), image });
+  notifyPanel();
+  return true;
+}
+
 /* ------------------------------------------------------------ side panel */
 // Only this extension's own pages (side panel) may talk to the worker.
 // Approvals are accepted from nowhere else.
@@ -2442,7 +2644,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           const tabsHere = typeof msg.windowId === "number" ? tids.filter((t) => t.windowId === msg.windowId).length : null;
           const tabsList = tids.map((t) => ({ tabId: t.id, host: P.hostOf(t.url), title: t.title || "",
             windowId: t.windowId, here: typeof msg.windowId === "number" ? t.windowId === msg.windowId : null }));
-          chats.push({ sessionId: sid, chatName: s.chatName, tabs: tids.length, tabsHere, tabsList, sites: Object.keys(s.sites) });
+          const view = liveViews.get(sid);
+          chats.push({ sessionId: sid, chatName: s.chatName, tabs: tids.length, tabsHere, tabsList, sites: Object.keys(s.sites),
+            view: view ? { tabId: view.tabId, at: view.at, image: view.image || null, blocked: view.blocked || null } : null });
         }
         return { ok: true, relay: { connected: wsReady, url: DEFAULT_RELAY, error: await local.get("relayError", ""),
                                     startError: await local.get("relayStartError", "") },
