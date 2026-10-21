@@ -217,6 +217,15 @@ function renderRest(st) {
     head.style.alignItems = "center";
     head.style.gap = "8px";
     block.append(head);
+    // The live view: what this chat's tab looks like while it works. On a
+    // page the screenshot gate calls sensitive there is no picture at
+    // all — the note says why instead.
+    if (x.view && x.view.image) {
+      block.append(el("img", { class: "liveview", src: x.view.image, alt: "Live view of the tab this chat is working" }),
+        el("div", { class: "muted" }, "Live view \u00b7 " + new Date(x.view.at).toLocaleTimeString()));
+    } else if (x.view && x.view.blocked) {
+      block.append(el("p", { class: "muted" }, "Live view hidden: this page has " + x.view.blocked + "."));
+    }
     if (Array.isArray(x.tabsList) && x.tabsList.length) {
       const tl = el("div", { class: "sites" });
       for (const t of x.tabsList) tl.append(el("div", { class: "muted" }, "• " + (t.title || t.host) + (t.here === false ? " — another window" : "")));
