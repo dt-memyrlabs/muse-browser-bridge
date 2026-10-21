@@ -1,5 +1,7 @@
 # Muse Chrome Bridge
 
+<img src="icon-512.png" width="128" alt="Muse Chrome Bridge icon">
+
 Share a browser tab with a Muse chat. You generate a one-time code in
 the extension's side panel and paste it into that chat. The chat can then
 work in the tab you shared.
