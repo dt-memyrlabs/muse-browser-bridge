@@ -42,6 +42,8 @@ function install({ relayUrl, fakeSocket = true } = {}) {
     tabsCreated: event(),
   };
   const pillOf = {};   // tabId -> chat name the pill shows (set through chrome.scripting)
+  const cursorOf = {}; // tabId -> last cursor command the worker sent (through chrome.scripting)
+  const captures = []; // every captureVisibleTab call: {windowId, at}
   // What the page looks like to the probe. Tests change these.
   const page = {
     text: () => "page text here",
@@ -122,7 +124,7 @@ function install({ relayUrl, fakeSocket = true } = {}) {
       case "DOM.getNodeForLocation": return { backendNodeId: 900 };
       case "DOM.resolveNode": return { object: { objectId: "obj:" + params.backendNodeId } };
       case "DOM.describeNode": return { node: { attributes: [] } };
-      case "DOM.getContentQuads": return { quads: [[10, 10, 30, 10, 30, 30, 10, 30]] };
+      case "DOM.getContentQuads": return { quads: typeof page.quads === "function" ? page.quads(target.tabId, params) : (page.quads || [[10, 10, 30, 10, 30, 30, 10, 30]]) };
       case "Accessibility.getFullAXTree":
         return { nodes: page.ax[target.tabId] || [{ nodeId: "1", role: { value: "RootWebArea" }, name: { value: "" }, backendDOMNodeId: 1 }] };
       case "Accessibility.getPartialAXTree": {
@@ -196,6 +198,11 @@ function install({ relayUrl, fakeSocket = true } = {}) {
       ungroup: async (ids) => { for (const id of [].concat(ids)) setGroup(id, -1); },
       remove: async (ids) => { for (const id of [].concat(ids)) { tabs.delete(id); E.tabsRemoved.fire(id); } },
       goBack: async () => {}, goForward: async () => {},
+      captureVisibleTab: async (windowId, opts) => {
+        captures.push({ windowId, at: Date.now() });
+        if (typeof page.captureView === "function") return page.captureView(windowId, opts);
+        return "data:image/jpeg;base64," + page.shot;
+      },
       onUpdated: { addListener: (f) => E.tabsUpdated.addListener(f) },
       onCreated: { addListener: (f) => E.tabsCreated.addListener(f) },
       onRemoved: { addListener: (f) => E.tabsRemoved.addListener(f) },
@@ -218,7 +225,12 @@ function install({ relayUrl, fakeSocket = true } = {}) {
     scripting: {
       executeScript: async ({ target, func, args }) => {
         if (!tabs.has(target.tabId)) throw new Error("No tab with id: " + target.tabId);
-        if (func) pillOf[target.tabId] = args && args[0];
+        if (func) {
+          // The pill and the cursor are driven the same way; tell them apart
+          // by the page-global each func drives, as the real page would.
+          if (String(func).includes("__museBridgeCursor")) cursorOf[target.tabId] = args && args[0];
+          else pillOf[target.tabId] = args && args[0];
+        }
         return [{ result: null }];
       },
     },
@@ -258,7 +270,7 @@ function install({ relayUrl, fakeSocket = true } = {}) {
   const panel = (kind, extra, sender = PANEL) => new Promise((resolve) => {
     E.runtimeMsg.fire({ kind, ...(extra || {}) }, sender, resolve);
   });
-  return { tabs, groups, sent, cdpLog, inputs, notifications, windowTypes, pillOf, E, page, mkTab, setGroup, setUrl, mkGroup, moveToWindow, FakeWS,
+  return { tabs, groups, sent, cdpLog, inputs, notifications, windowTypes, pillOf, cursorOf, captures, E, page, mkTab, setGroup, setUrl, mkGroup, moveToWindow, FakeWS,
            setLastFocusedWindow: (id) => { lastFocusedWindowId = id; },
            panel, sessionStore, localStore, sw: (expr) => vm.runInThisContext(expr) };
 }
